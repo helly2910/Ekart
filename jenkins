@@ -1,68 +1,90 @@
 pipeline {
-    agent any
+    agent any // Specifies that the pipeline can run on any available agent
     
     tools {
-        maven 'maven3'
-        jdk 'jdk17'
+        maven 'maven3' // Use Maven version 3 for build-related tasks
+        jdk 'jdk17'    // Use JDK version 17 for Java compilation and execution
     }
     
     environment {
-        SCANNER_HOME = tool 'sonar-scanner'
+        SCANNER_HOME = tool 'sonar-scanner' // Define SonarQube scanner home for analysis
     }
 
     stages {
         stage('Git checkout') {
+            // Checkout the source code from the specified Git repository and branch
             steps {
                 git branch: 'main', url: 'https://github.com/helly2910/Ekart.git'
             }
         }
         
-        stage('compile') {
+        stage('Compile') {
+            // Compile the project source code using Maven
             steps {
                 sh "mvn compile"
             }
         }
         
-        stage('unit tests') {
+        stage('Unit Tests') {
+            // Run unit tests with Maven. '-DskipTests=true' should be removed if tests need to run
             steps {
                 sh "mvn test -DskipTests=true"
             }
         }
         
-        stage('sonarQube analysis') {
+        stage('SonarQube Analysis') {
+            // Perform static code analysis using SonarQube scanner
             steps {
-                withSonarQubeEnv('sonar') {
+                withSonarQubeEnv('sonar') { 
                     sh ''' $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectKey=EKART -Dsonar.projectName=EKART \
                         -Dsonar.java.binaries=. '''
                 }
             }
         }
         
-        stage('owasp DC') {
+        stage('Check Quality Gate') {
+            // Check if the SonarQube analysis meets the Quality Gate requirements
+            steps {
+                script {
+                    // Wait for SonarQube results and fetch Quality Gate status
+                    def qualityGate = waitForQualityGate()
+                    
+                    // Abort the pipeline if the Quality Gate is not passed
+                    if (qualityGate.status != 'OK') {
+                        error "Pipeline aborted due to SonarQube quality gate failure: ${qualityGate.status}"
+                    }
+                }
+            }
+        }
+        
+        stage('OWASP Dependency Check') {
+            // Perform a security scan for dependencies using OWASP Dependency Check
             steps {
                 dependencyCheck additionalArguments: ' --scan ./', odcInstallation: 'DC'
-                dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+                dependencyCheckPublisher pattern: '**/dependency-check-report.xml' // Publish the scan results
             }
         }
         
         stage('Build') {
+            // Package the application into a distributable format (e.g., JAR or WAR)
             steps {
                 sh "mvn package -DskipTests=true"
             }
         }
         
-        stage('deploy to nexus') {
+        stage('Deploy to Nexus') {
+            // Deploy the built artifacts to a Nexus repository
             steps {
                 withMaven(globalMavenSettingsConfig: 'global-maven', jdk: 'jdk17', maven: 'maven3', mavenSettingsConfig: '', traceability: true) {
-                  sh "mvn deploy -DskipTests=true"
+                    sh "mvn deploy -DskipTests=true"
                 }
             }
         }
         
-        stage('Docker build and Tag image') {
+        stage('Docker Build and Tag Image') {
+            // Build a Docker image for the application and tag it
             steps {
-                script{
-                    // This step should not normally be used in your script. Consult the inline help for details.
+                script {
                     withDockerRegistry(credentialsId: 'docker-cred', toolName: 'docker') {
                         sh "docker build -t helly105/ekart:latest -f docker/Dockerfile ."
                     }
@@ -70,16 +92,17 @@ pipeline {
             }
         }
         
-        stage('trivy scan') {
+        stage('Trivy Scan') {
+            // Scan the Docker image for vulnerabilities using Trivy
             steps {
-                sh " trivy image helly105/ekart:latest > trivyReport.txt "
+                sh "trivy image helly105/ekart:latest > trivyReport.txt"
             }
         }
         
-        stage('Docker push') {
+        stage('Docker Push') {
+            // Push the Docker image to a Docker registry
             steps {
-                script{
-                    // This step should not normally be used in your script. Consult the inline help for details.
+                script {
                     withDockerRegistry(credentialsId: 'docker-cred', toolName: 'docker') {
                         sh "docker push helly105/ekart:latest"
                     }
@@ -87,15 +110,23 @@ pipeline {
             }
         }
         
-        stage('Kubernetes deploy') {
+        stage('Kubernetes Deploy') {
+            // Deploy the application to a Kubernetes cluster using `kubectl`
             steps {
-                withKubeConfig(caCertificate: '', clusterName: '', contextName: '', credentialsId: 'k8s-token', namespace: 'webapps', restrictKubeConfigAccess: false, serverUrl: 'https://100.26.10.175:6443') {
+                withKubeConfig(
+                    caCertificate: '', 
+                    clusterName: '', 
+                    contextName: '', 
+                    credentialsId: 'k8s-token', 
+                    namespace: 'webapps', 
+                    restrictKubeConfigAccess: false, 
+                    serverUrl: 'https://100.26.10.175:6443') {
+                    
+                    // Apply Kubernetes deployment configuration and list services
                     sh "kubectl apply -f deploymentservice.yml -n webapps"
                     sh "kubectl get svc -n webapps"
                 }
             }
         }
-        
     }
 }
-
